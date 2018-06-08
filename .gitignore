@@ -27,4 +27,12 @@
 *.out
 *.app
 
-/Binaries/**
+Binaries
+Build
+Debug
+DerivedDataCache
+Intermediate
+Saved
+CMakeLists.txt
+Makefile
+.vscode

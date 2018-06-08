@@ -7,17 +7,32 @@
 #include "AssetStreamer.h"
 
 FAssetStreamer::FAssetStreamer()
-    : NetPlatform(new FStreamingNetworkPlatformFile())
-    , PakPlatform(new FPakPlatformFile())
+    : CurrentMode(), LockValue(0), LocalPlatformFile(nullptr), NetPlatform(new FStreamingNetworkPlatformFile())
+      , PakPlatform(nullptr), Listener(nullptr), bSigned(false), StreamableManager(nullptr)
 {
-    
+    Initialize();
 }
 
-bool FAssetStreamer::Initialize(FStreamableManager* StreamableManager)
+FAssetStreamer::~FAssetStreamer()
 {
-    check(StreamableManager);
+    if(bInitialized)
+    {
+        OnStreamingCompleteDelegate();
+    }
+    //if (StreamableManager) delete StreamableManager;
+    Unlock();
+}
+
+bool FAssetStreamer::Initialize()
+{
     if (!bInitialized)
     {
+        PakPlatform = MakeShareable<FPakPlatformFile>(new FPakPlatformFile());
+        LocalPlatformFile = &FPlatformFileManager::Get().GetPlatformFile();
+        //PakPlatform->Initialize(LocalPlatformFile, TEXT(""));
+        //FPlatformFileManager::Get().SetPlatformFile(*PakPlatform);
+        StreamableManager = MakeShareable<FStreamableManager>(new FStreamableManager());
+        
         // Load config values
         if (!GConfig->GetString(TEXT("AssetStreamer"), TEXT("ServerHost"), ServerHost, GEngineIni))
         {
@@ -26,10 +41,10 @@ bool FAssetStreamer::Initialize(FStreamableManager* StreamableManager)
         if (!GConfig->GetBool(TEXT("AssetStreamer"), TEXT("bSigned"), bSigned, GEngineIni))
         {
             bSigned = false;
-        }        
+        }
+        bInitialized = true;
 
-        LocalPlatformFile = &FPlatformFileManager::Get().GetPlatformFile();
-        if (LocalPlatformFile != nullptr)
+        /*if (LocalPlatformFile != nullptr)
         {
             IPlatformFile* PakPlatformFile = FPlatformFileManager::Get().GetPlatformFile(TEXT("PakFile"));
             IPlatformFile* NetPlatformFile = FPlatformFileManager::Get().GetPlatformFile(TEXT("NetworkFile"));
@@ -40,29 +55,26 @@ bool FAssetStreamer::Initialize(FStreamableManager* StreamableManager)
                     bInitialized = NetPlatform->Initialize(LocalPlatformFile, *FString::Printf(TEXT("-FileHostIP=%s"), *ServerHost));
                 }
             }
-        }
+            bInitialized = true;
+        }*/
     }
 
     if (!bInitialized)
     {
         UE_LOG(LogAsyncPackageStreamer, Error, TEXT("Failed to initialize AssetStreamer using %s for remote file streaming"), *ServerHost);
     }
-    else
-    {
-        // We aquire the StreamableManager pointer only on successfull initialization
-        this->StreamableManager = StreamableManager;
-    }
+    
 
     return bInitialized;
 }
 
-bool FAssetStreamer::StreamPackage(const FString& PakFileName, IAssetStreamerListener* AssetStreamerListener, EAssetStreamingMode::Type DesiredMode, const TCHAR* CmdLine)
+bool FAssetStreamer::StreamPackage(const FString& PakFileName, TSharedPtr<IAssetStreamerListener> AssetStreamerListener, EAssetStreamingMode::Type DesiredMode, const TCHAR* CmdLine)
 {
     Lock();
     Listener = NULL;
 
     const bool bRemote = (DesiredMode == EAssetStreamingMode::Remote);
-    if (!(bRemote && UseRemote(CmdLine) || !bRemote && UseLocal(CmdLine)))
+    if (!((bRemote && UseRemote(CmdLine)) || (!bRemote && UseLocal(CmdLine))))
     {
         Unlock();
         return false;
@@ -72,9 +84,14 @@ bool FAssetStreamer::StreamPackage(const FString& PakFileName, IAssetStreamerLis
 
     // Now Get the path and start the streaming
     const FString FilePath = bRemote ? ResolveRemotePath(PakFileName) : ResolveLocalPath(PakFileName);
-
+    if(!FPaths::FileExists(FilePath))
+    {
+        Unlock();
+        UE_LOG(LogAsyncPackageStreamer, Error, TEXT("Invalid pak file path: %s"), *FilePath);
+        return false;
+    }
     // Make sure the Pak file is actually there
-    FPakFile PakFile(*FilePath, bSigned);
+    FPakFile PakFile(PakPlatform.Get(), *FilePath, bSigned);
     if (!PakFile.IsValid())
     {
         Unlock();
@@ -100,12 +117,20 @@ bool FAssetStreamer::StreamPackage(const FString& PakFileName, IAssetStreamerLis
     StreamedAssets.Empty();
     for (TSet<FString>::TConstIterator FileItem(FileList); FileItem; ++FileItem)
     {
-        FString AssetName = *FileItem;
-        if (AssetName.EndsWith(FPackageName::GetAssetPackageExtension()) ||
-            AssetName.EndsWith(FPackageName::GetMapPackageExtension()))
+        FSoftObjectPath AssetName = *FileItem;
+        FString AssetNameString = AssetName.ToString();
+        if (AssetNameString.EndsWith(FPackageName::GetAssetPackageExtension()) ||
+            AssetNameString.EndsWith(FPackageName::GetMapPackageExtension()))
         {
+            //AssetNameString = AssetNameString.Replace(L".umap", L".AdditionalLevel").Replace(L"../../../Engine/Content/Plugins", L"/Engine/Content/Plugins");
             // TODO: Set path relative to mountpoint for remote streaming?
-            StreamedAssets.Add(AssetName);
+            //StreamedAssets.Add(AssetName);
+            //{AssetPathName=0x0000024d0e423d30 "../../../Engine/Content/Plugins/MyDLC/Content/AdditionalLevel.umap" ...}
+            StreamedAssets.Add(
+                //AssetNameString.Replace(L"../../../Engine/Content/Plugins", L"")
+                AssetNameString
+            );
+            
         }
     }
 
@@ -113,23 +138,31 @@ bool FAssetStreamer::StreamPackage(const FString& PakFileName, IAssetStreamerLis
     Listener = AssetStreamerListener;
 
     // Tell the listener which assets we are about to stream
-    if (Listener)
+    if (Listener.Get())
     {
-        Listener->OnPrepareAssetStreaming(StreamedAssets);
+        Listener.Get()->OnPrepareAssetStreaming(StreamedAssets);
     }
 
     // IF we have not yet a StreamableManager setup (Arrr...) abort
-    if (StreamableManager == nullptr)
+    if (StreamableManager.GetSharedReferenceCount()==0)
     {
         Unlock();
         UE_LOG(LogAsyncPackageStreamer, Error, TEXT("No StreamableManager registered, did you missed to call initialize?"));
         return false;
     }
 
-    StreamableManager->RequestAsyncLoad(StreamedAssets, FStreamableDelegate::CreateRaw(this, &FAssetStreamer::OnStreamingCompleteDelegate));
+    //StreamableManager->RequestAsyncLoad(StreamedAssets, FStreamableDelegate::CreateRaw(this, &FAssetStreamer::OnStreamingCompleteDelegate));
     return true;
 }
 
+
+void FAssetStreamer::BlockUntilStreamingFinished(float SleepTime) const
+{
+    while (LockValue != 0)
+    {
+        FPlatformProcess::Sleep(SleepTime);
+    }
+}
 
 bool FAssetStreamer::UseRemote(const TCHAR* CmdLine)
 {
@@ -170,10 +203,10 @@ FString FAssetStreamer::ResolveLocalPath(const FString& FileName)
 void FAssetStreamer::OnStreamingCompleteDelegate()
 {
     // Call listener!
-    if (Listener != NULL)
+    if (Listener.Get() != nullptr)
     {
-        Listener->OnAssetStreamComplete();
-        Listener = NULL;
+       // Listener.Get()->OnAssetStreamComplete();
+        //Listener = nullptr;
     }
 
     // Finally unlock the streamer

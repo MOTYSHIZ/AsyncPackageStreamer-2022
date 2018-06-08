@@ -6,7 +6,6 @@
 	"VersionName" : "1.0",
 	"CreatedBy" : "Moritz Wundke & Ruben Avalos Elvira",
 	"CreatedByURL" : "http://www.moritzwundke.com",
-	"EngineVersion" : "4.5.0",
 	"Description" : "Provides the ability to load PAK files from a local or remote location.",
 	"Category" : "DLC",
 	"EnabledByDefault" : true,

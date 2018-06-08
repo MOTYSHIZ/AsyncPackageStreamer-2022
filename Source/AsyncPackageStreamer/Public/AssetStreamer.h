@@ -5,7 +5,7 @@
 class IPlatformFile;
 class FStreamingNetworkPlatformFile;
 class FPakPlatformFile;
-struct FStringAssetReference;
+struct FSoftObjectPath;
 struct FStreamableManager;
 
 namespace EAssetStreamingMode
@@ -24,11 +24,19 @@ class ASYNCPACKAGESTREAMER_API IAssetStreamerListener
 {
 public:
     /** Must have the same signature as FStreamableDelegate. Called when the streaming has completed. */
-    virtual void OnAssetStreamComplete() = 0;
+    virtual void OnAssetStreamComplete()
+    {
+        UE_LOG(LogTemp, Log, TEXT("Assets Stream Completed"));
+    }
 
     /** Called before the streaming is initiated, used to inform which assets will be requested */
-    virtual void OnPrepareAssetStreaming(const TArray<FStringAssetReference>& StreamedAssets) = 0;
+    virtual void OnPrepareAssetStreaming(const TArray<FSoftObjectPath>& StreamedAssets)
+    {
+        
+    }
+    virtual ~IAssetStreamerListener(){}
 };
+
 
 /**
  * The asset streamer is capable of loading and mounting the content of a PAK file from the local FS
@@ -36,25 +44,21 @@ public:
  */
 class ASYNCPACKAGESTREAMER_API FAssetStreamer
 {
+   
 public:
     FAssetStreamer();
 
     /** Unlock the streamer when destroyed */
-    ~FAssetStreamer()
-    {
-        Unlock();
-    }
+    ~FAssetStreamer();
 
-    /** Initialize the FAssetStreamer and point to the using host:port */
-    bool Initialize(FStreamableManager* StreamableManager);
 
     /**
      * Stream assets form a PAK file remotely or from the local file system
      */
-    bool StreamPackage(const FString& PakFileName, IAssetStreamerListener* AssetStreamerListener, EAssetStreamingMode::Type DesiredMode, const TCHAR* CmdLine);
+    bool StreamPackage(const FString& PakFileName, TSharedPtr<IAssetStreamerListener> AssetStreamerListener, EAssetStreamingMode::Type DesiredMode, const TCHAR* CmdLine);
 
     /** Check if the streamed has been initialized or not */
-    uint32 bInitialized : 1;
+    bool bInitialized = false;
 
     /** The mode that is currently set for streaming */
     EAssetStreamingMode::Type CurrentMode;
@@ -65,18 +69,14 @@ public:
     }
 
     /** Blocks this thread until we have stopped streaming */
-    void BlockUntilStreamingFinished(float SleepTime = 0.1f) const
-    {
-        while (LockValue != 0)
-        {
-            FPlatformProcess::Sleep(SleepTime);
-        }
-    }
+    void BlockUntilStreamingFinished(float SleepTime = 0.1f) const;
 
     /** The host:port connection string for the remote file server*/
     FString ServerHost;
 
 private:
+    /** Initialize the FAssetStreamer and point to the using host:port */
+    bool Initialize();
 
     /** Set the  streaming to be using the remote FS*/
     bool UseRemote(const TCHAR* CmdLine);
@@ -114,15 +114,15 @@ private:
     TSharedPtr<FPakPlatformFile> PakPlatform;
 
     /** The current listener for the current streaming task */
-    IAssetStreamerListener* Listener;
+    TSharedPtr<IAssetStreamerListener> Listener;
 
     /** The assets that we are goind to stream */
-    TArray<FStringAssetReference> StreamedAssets;
+    TArray<FSoftObjectPath> StreamedAssets;
 
     /** Should we use signed PAKs only? */
     bool bSigned;
 
     /** The streamable manager 'someone' must provide us with from the outside */
-    FStreamableManager* StreamableManager;
+    TSharedPtr<FStreamableManager> StreamableManager;
 
 };
