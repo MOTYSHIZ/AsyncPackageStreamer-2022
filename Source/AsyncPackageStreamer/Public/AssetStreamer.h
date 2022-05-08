@@ -56,6 +56,10 @@ public:
      * Stream assets form a PAK file remotely or from the local file system
      */
     bool StreamPackage(const FString& PakFileName, TSharedPtr<IAssetStreamerListener> AssetStreamerListener, EAssetStreamingMode::Type DesiredMode, const TCHAR* CmdLine);
+    // Version for use with UObjects
+    bool StreamPackage(const FString& PakFileName, IAssetStreamerListener* AssetStreamerListener, EAssetStreamingMode::Type DesiredMode, const TCHAR* CmdLine);
+
+    bool LoadPakAndTryStream(EAssetStreamingMode::Type DesiredMode, const TCHAR* CmdLine, const FString& PakFileName);
 
     /** Check if the streamed has been initialized or not */
     bool bInitialized = false;
@@ -115,6 +119,9 @@ private:
 
     /** The current listener for the current streaming task */
     TSharedPtr<IAssetStreamerListener> Listener;
+
+    /** The current listener for the current streaming task */
+    IAssetStreamerListener* ListenerObjPtr;
 
     /** The assets that we are goind to stream */
     TArray<FSoftObjectPath> StreamedAssets;
